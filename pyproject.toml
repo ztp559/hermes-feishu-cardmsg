@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-feishu-cardmsg"
+version = "0.1.0"
+description = "飞书/Lark 交互式卡片消息构建器 - 从 Markdown 自动生成 Schema 2.0 卡片 JSON"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = ["pyyaml>=6.0"]
+authors = [{ name = "ztp559" }]
+keywords = ["feishu", "lark", "card", "message", "hermes"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic ::at",
+]
+
+[project.scripts]
+feishu-card-send = "feishu_card_builder.cli:main"
+
+[project.urry = "https://github.com/ztp559/hermes-feishu-cardmsg"
