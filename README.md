@@ -2,32 +2,54 @@
 
 飞书/Lark 交互式卡片消息构建器。从 Markdown 文本自动生成飞书 Schema 2.0 交互式卡片 JSON。
 
-## 功能
+## 组成部分
 
-- 自动提取思考过程（`<think>`/`[[HERMES_REASONING]]`）并显示为可折叠面板
-- 自动提取工具调用并显示为可折叠面板
-- Markdown 表格转飞书原生表格
-- 支持标题、分割线、普通文本
-- 支持状态标记（thinking/completed/ended）
-- 支持自定义 Footer（耗时、token 统计、上下文进度条）
-- 链式 API，灵活构建
-- CLI 工具，可直接从 gateway 调用
+本项目包含三个组件，配合使用：
+
+1. **`feishu_card_builder/`** — Python 包，负责将 Markdown 转为飞书卡片 JSON
+2. **`feishu_card_send.py`** — 独立入口脚本，gateway 通过 subprocess 调用
+3. **`patches/`** — 对 hermes-agent `gateway/run.py` 的 patch（`local/feishu-card-footer` 分支）
 
 ## 架构
 
 ```
-run.py (Hermes gateway)
-  └─ subprocess ─→ feishu_card_send.py (薄包装)
-                      └─→ feishu_card_builder.cli.main()
-                             ├─ 构建 footer（模型、耗时、上下文）
-                             ├─ CardBuilder().build(content)
+Hermes gateway (run.py, local/feishu-card-footer 分支)
+  └─ subprocess ─→ ~/.hermes/scripts/feishu_card_send.py
+                      └─→ feishu_card_builder (venv 中)
+                             ├─ 解析 AI 回复（reasoning/tools/footer）
+                             ├─ 构建 Schema 2.0 卡片 JSON
                              └─ lark-cli im +messages-send
 ```
 
-## 安装
+## hermes update 后重新应用
 
 ```bash
-pip install git+https://github.com/ztp559/hermes-feishu-cardmsg.git
+# 方式一：使用脚本
+./scripts/apply-patch.sh
+
+# 方式二：手动
+cd ~/.hermes/hermes-agent
+git checkout local/feishu-card-footer
+git rebase main
+# 如有冲突，解决后 git rebase --continue
+
+# 确保 feishu_card_builder 已安装
+~/.hermes/hermes-agent/venv/bin/pip install git+https://github.com/ztp559/hermes-feishu-cardmsg.git
+```
+
+## 安装（首次）
+
+```bash
+# 1. 安装 Python 包到 venv
+~/.hermes/hermes-agent/venv/bin/pip install git+https://github.com/ztp559/hermes-feishu-cardmsg.git
+
+# 2. 放置入口脚本
+cp feishu_card_send.py ~/.hermes/scripts/feishu_card_send.py
+
+# 3. 应用 gateway patch
+cd ~/.hermes/hermes-agent
+git checkout -b local/feishu-card-footer main
+git am patches/0001-feat-gateway-feishu-card-message.patch
 ```
 
 ## 快速开始
@@ -35,68 +57,36 @@ pip install git+https://github.com/ztp559/hermes-feishu-cardmsg.git
 ```python
 from feishu_card_builder import CardBuilder
 
-builder = CardBuilder()
-card_json = builder.build("## 标题\n\n内容...")
-```
-
-### 自动模式
-
-传入完整 AI 回复文本，自动解析所有部分：
-
-```python
-content = """
+# 自动模式：传入完整 AI 回复
+card_json = CardBuilder().build("""
 [[HERMES_STATUS:completed]]
 
 ## 分析结果
 
-这是主体内容...
+主体内容...
 
 [[HERMES_REASONING]]
-让我分析一下这个问题...
+思考过程...
 [[/HERMES_REASONING]]
-
-[[HERMES_TOOLS]]
-调用了 web_search("飞书卡片")
-[[/HERMES_TOOLS]]
 
 [[HERMES_FOOTER]]
 已完成 · 耗时 2.5s · gpt-4
 [[/HERMES_FOOTER]]
-"""
+""")
 
-card_json = builder.build(content)
-```
-
-### 手动模式
-
-```python
-from feishu_card_builder import CardBuilder, StatusType
+# 手动模式：链式构建
+from feishu_card_builder import StatusType
 
 card_json = (
     CardBuilder()
-    .set_title("自定义标题")
+    .set_title("标题")
     .set_status(StatusType.COMPLETED)
-    .add_body("主体内容")
-    .add_thinking("思考过程...")
-    .add_tools("工具调用...")
-    .set_footer("已完成 · 耗时 2.5s")
+    .add_body("内容")
+    .add_thinking("思考...")
+    .set_footer("耗时 1s")
     .build_from_parts()
 )
 ```
-
-### CLI 使用
-
-```bash
-# 通过 pip install 后
-feishu-card-send --input payload.json
-
-# 或直接调用
-python feishu_card_send.py --input payload.json
-```
-
-## Gateway 集成
-
-详见 [docs/gateway_integration.md](docs/gateway_integration.md)
 
 ## 标记格式
 
@@ -104,7 +94,7 @@ python feishu_card_send.py --input payload.json
 |------|------|
 | `[[HERMES_STATUS:thinking\|completed\|ended]]` | 状态标记 |
 | `[[HERMES_REASONING]]...[[/HERMES_REASONING]]` | 思考过程 |
-| `<think>...</think>式） |
+| `<think>...</think>` | 思考过程（兼容格式） |
 | `[[HERMES_TOOLS]]...[[/HERMES_TOOLS]]` | 工具调用 |
 | `[[HERMES_FOOTER]]...[[/HERMES_FOOTER]]` | Footer 内容 |
 

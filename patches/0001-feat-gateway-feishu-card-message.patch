@@ -1,0 +1,120 @@
+From 0138bc07e944ea3c282b308e583a2c2bbd0103f4 Mon Sep 17 00:00:00 2001
+From: abcreator <abcreator@local>
+Date: Thu, 14 May 2026 10:48:16 +0800
+Subject: [PATCH] feat(gateway): feishu card message with runtime footer
+
+- Send Feishu responses as interactive cards via feishu_card_builder
+- Includes model, response time, API calls, context usage in footer
+- Falls back to plain text on any failure
+- Uses venv python to ensure feishu_card_builder is importable
+---
+ gateway/run.py | 86 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 86 insertions(+)
+
+diff --git a/gateway/run.py b/gateway/run.py
+index 46c508e4b..67d9007f7 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -32,6 +32,7 @@ import logging
+ import os
+ import re
+ import shlex
++import subprocess
+ import sys
+ import signal
+ import tempfile
+@@ -7908,6 +7909,91 @@ class GatewayRunner:
+                         logger.debug("trailing footer send failed: %s", _e)
+                 return None
+ 
++            # ── Feishu Card Message ──────────────────────────────────
++            # For Feishu platform, attempt to send response as a rich card
++            # with runtime metadata footer. Falls back to plain text on failure.
++            if (
++                source.platform == Platform.FEISHU
++                and response
++                and not agent_result.get("failed")
++                and not agent_result.get("already_sent")
++            ):
++                try:
++                    _feishu_card_payload = {
++                        "chat_id": source.chat_id or "",
++                        "response": response,
++                        "model": agent_result.get("model") or "",
++                        "response_time_seconds": round(max(0.0, _response_time), 2),
++                        "api_calls": _api_calls or 0,
++                        "last_prompt_tokens": agent_result.get("last_prompt_tokens", 0) or 0,
++                        "provider": "",
++                        "base_url": "",
++                        "config_context_length": None,
++                    }
++
++                    # Resolve provider/base_url from runtime config
++                    try:
++                        _fc_runtime = _resolve_runtime_agent_kwargs()
++                        _feishu_card_payload["provider"] = _fc_runtime.get("provider") or ""
++                        _feishu_card_payload["base_url"] = _fc_runtime.get("base_url") or ""
++                    except Exception:
++                        pass
++
++                    # Resolve context_length from config
++                    try:
++                        _fc_cfg = _load_gateway_config()
++                        _fc_model_cfg = _fc_cfg.get("model", {})
++                        if isinstance(_fc_model_cfg, dict):
++                            _fc_ctx = _fc_model_cfg.get("context_length")
++                            if _fc_ctx is not None:
++                                _feishu_card_payload["config_context_length"] = int(_fc_ctx)
++                            if not _feishu_card_payload["provider"]:
++                                _feishu_card_payload["provider"] = _fc_model_cfg.get("provider") or ""
++                            if not _feishu_card_payload["base_url"]:
++                                _feishu_card_payload["base_url"] = _fc_model_cfg.get("base_url") or ""
++                    except Exception:
++                        pass
++
++                    _fc_payload_path = None
++                    with tempfile.NamedTemporaryFile(
++                        mode="w", encoding="utf-8", suffix=".json", delete=False,
++                    ) as _fc_fp:
++                        json.dump(_feishu_card_payload, _fc_fp, ensure_ascii=False)
++                        _fc_fp.flush()
++                        _fc_payload_path = _fc_fp.name
++
++                    _fc_venv_python = str(_hermes_home / "hermes-agent" / "venv" / "bin" / "python")
++                    _fc_script = str(_hermes_home / "scripts" / "feishu_card_send.py")
++
++                    _fc_proc = await asyncio.to_thread(
++                        subprocess.run,
++                        [_fc_venv_python, _fc_script, "--input", _fc_payload_path],
++                        capture_output=True,
++                        text=True,
++                        timeout=30,
++                    )
++
++                    if _fc_proc.returncode == 0:
++                        logger.info(
++                            "[FeishuCard] card sent: %s",
++                            (_fc_proc.stdout or "").strip()[:200],
++                        )
++                        return None
++
++                    logger.warning(
++                        "[FeishuCard] fallback to text. rc=%s stderr=%r",
++                        _fc_proc.returncode,
++                        (_fc_proc.stderr or "").strip()[:300],
++                    )
++                except Exception as _fc_exc:
++                    logger.warning("[FeishuCard] exception, fallback to text: %s", _fc_exc)
++                finally:
++                    try:
++                        if _fc_payload_path:
++                            Path(_fc_payload_path).unlink(missing_ok=True)
++                    except Exception:
++                        pass
++
+             return response
+             
+         except Exception as e:
+-- 
+2.34.1
+
